@@ -24,14 +24,14 @@
 #include <braft/util.h>
 #include <braft/storage.h>
 
-#include "atomic.pb.h"
+#include "example/atomic/atomic.pb.h"
 
 DEFINE_bool(allow_absent_key, false, "Cas succeeds if the key is absent while "
                                      " exptected value is exactly 0");
 DEFINE_bool(check_term, true, "Check if the leader changed to another term");
 DEFINE_bool(disable_cli, false, "Don't allow raft_cli access this node");
 DEFINE_bool(log_applied_task, false, "Print notice log when a task is applied");
-DEFINE_int32(election_timeout_ms, 5000, 
+DEFINE_int32(election_timeout_ms, 5000,
             "Start election in such milliseconds if disconnect with the leader");
 DEFINE_int32(map_capacity, 1024, "Initial capicity of value map");
 DEFINE_int32(port, 8100, "Listen port of this peer");
@@ -39,6 +39,7 @@ DEFINE_int32(snapshot_interval, 30, "Interval between each snapshot");
 DEFINE_string(conf, "", "Initial configuration of the replication group");
 DEFINE_string(data_path, "./data", "Path of data stored on");
 DEFINE_string(group, "Atomic", "Id of the replication group");
+DEFINE_string(ip, "127.0.0.1", "my ip");
 
 namespace example {
 
@@ -82,7 +83,7 @@ public:
         : _node(NULL)
         , _leader_term(-1)
     {
-        CHECK_EQ(0, _value_map.init(FLAGS_map_capacity));
+        //CHECK_EQ(0, _value_map.init(FLAGS_map_capacity));
     }
 
     ~Atomic() {
@@ -91,7 +92,11 @@ public:
 
     // Starts this node
     int start() {
-        butil::EndPoint addr(butil::my_ip(), FLAGS_port);
+        //butil::EndPoint addr("butil::my_ip()", FLAGS_port);
+        butil::ip_t ip;
+        const char* strIp = FLAGS_ip.c_str();
+        butil::str2ip(strIp, &ip);
+        butil::EndPoint addr(ip, FLAGS_port);
         braft::NodeOptions node_options;
         if (node_options.initial_conf.parse_from(FLAGS_conf) != 0) {
             LOG(ERROR) << "Fail to parse configuration `" << FLAGS_conf << '\'';
@@ -123,10 +128,11 @@ public:
         return apply(OP_GET, request, response, done);
     }
 
-    void exchange(const ::example::ExchangeRequest* request,
+    void exchange(::example::ExchangeRequest* request,
                   ::example::AtomicResponse* response,
                   ::google::protobuf::Closure* done) {
-        return apply(OP_EXCHANGE, request, response, done);
+        apply(OP_EXCHANGE, request, response, done);
+        return ;
     }
 
     void compare_exchange(const ::example::CompareExchangeRequest* request,
@@ -159,7 +165,7 @@ friend class AtomicClosure;
         // peers in the group receive this request as well.
         // Notice that _value can't be modified in this routine otherwise it
         // will be inconsistent with others in this group.
-        
+
         // Serialize request to IOBuf
         const int64_t term = _leader_term.load(butil::memory_order_relaxed);
         if (term < 0) {
@@ -200,7 +206,7 @@ friend class AtomicClosure;
 
     // @braft::StateMachine
     void on_apply(braft::Iterator& iter) {
-        // A batch of tasks are committed, which must be processed through 
+        // A batch of tasks are committed, which must be processed through
         // |iter|
         for (; iter.valid(); iter.next()) {
             // This guard helps invoke iter.done()->Run() asynchronously to
@@ -244,8 +250,8 @@ friend class AtomicClosure;
             // The purpose of following logs is to help you understand the way
             // this StateMachine works.
             // Remove these logs in performance-sensitive servers.
-            LOG_IF(INFO, FLAGS_log_applied_task) 
-                    << "Handled operation " << op 
+            LOG_IF(INFO, FLAGS_log_applied_task)
+                    << "Handled operation " << op
                     << " on id=" << response->id()
                     << " at log_index=" << iter.index()
                     << " success=" << response->success()
@@ -263,8 +269,7 @@ friend class AtomicClosure;
         sc->values.reserve(_value_map.size());
         sc->writer = writer;
         sc->done = done;
-        for (ValueMap::const_iterator 
-                it = _value_map.begin(); it != _value_map.end(); ++it) {
+        for (auto it = _value_map.begin(); it != _value_map.end(); ++it) {
             sc->values.push_back(std::make_pair(it->first, it->second));
         }
 
@@ -278,8 +283,8 @@ friend class AtomicClosure;
         std::string snapshot_path = reader->get_path();
         snapshot_path.append("/data");
         std::ifstream is(snapshot_path.c_str());
-        int64_t id = 0;
-        int64_t value = 0;
+        std::string id;
+        std::string value;
         while (is >> id >> value) {
             _value_map[id] = value;
         }
@@ -313,11 +318,11 @@ friend class AtomicClosure;
     }
 
     // end of @braft::StateMachine
-    
+
     void get_value(const butil::IOBuf& data,
                    const google::protobuf::Message* request,
                    AtomicResponse* response) {
-        int64_t id = 0;
+        std::string id;
         if (request) {
             // This task is applied by this node, get value from this
             // closure to avoid additional parsing.
@@ -328,46 +333,54 @@ friend class AtomicClosure;
             CHECK(req.ParseFromZeroCopyStream(&wrapper));
             id = req.id();
         }
-        int64_t* const v = _value_map.seek(id);
+        std::string const v = _value_map[id];
         response->set_success(true);
         response->set_id(id);
-        response->set_old_value(v ? *v : 0);
-        response->set_new_value(v ? *v : 0);
+        response->set_old_value(v);
+        response->set_new_value(v);
     }
 
     void exchange(const butil::IOBuf& data,
                   const google::protobuf::Message* request,
                   AtomicResponse* response) {
-        int64_t id = 0;
-        int64_t value = 0;
+        std::string id;
+        std::string value;
         if (request) {
             // This task is applied by this node, get value from this
             // closure to avoid additional parsing.
             const ExchangeRequest* req
                     = dynamic_cast<const ExchangeRequest*>(request);
-            id = req->id();
+            //拆分value
             value = req->value();
+            auto pos = value.find(":");
+            id = value.substr(0, pos);
+            value = value.substr(pos + 1, std::string::npos);
         } else {
             butil::IOBufAsZeroCopyInputStream wrapper(data);
             ExchangeRequest req;
             CHECK(req.ParseFromZeroCopyStream(&wrapper));
-            id = req.id();
+            //拆分value
             value = req.value();
+            auto pos = value.find(":");
+            id = value.substr(0, pos);
+            value = value.substr(pos + 1, std::string::npos);
         }
-        int64_t& old_value = _value_map[id];
+        std::string old_value = _value_map[id];
         response->set_success(true);
         response->set_id(id);
         response->set_old_value(old_value);
         response->set_new_value(value);
         old_value = value;
+        //LOG(INFO) << "onapply exchange isSuccess:" << response->success() <<" id:"
+        //           << response->id()  << " old_value:" << response->old_value() << " new_value:" << response->new_value();
     }
 
     void cas(const butil::IOBuf& data,
                   const google::protobuf::Message* request,
                   AtomicResponse* response) {
-        int64_t id = 0;
-        int64_t value = 0;
-        int64_t expected = 0;
+        std::string id;
+        std::string value;
+        std::string expected;
         if (request) {
             // This task is applied by this node, get value from this
             // closure to avoid additional parsing.
@@ -384,7 +397,7 @@ friend class AtomicClosure;
             value = req.new_value();
             expected = req.expected_value();
         }
-        int64_t& old_value = _value_map[id];
+        std::string& old_value = _value_map[id];
         response->set_old_value(old_value);
         response->set_id(id);
         if (old_value != expected) {
@@ -411,17 +424,17 @@ friend class AtomicClosure;
         return NULL;
     }
 
-    typedef butil::FlatMap<int64_t, int64_t> ValueMap;
+//    typedef butil::FlatMap<std::string, std::string> ValueMap;
 
     struct SnapshotClosure {
-        std::vector<std::pair<int64_t, int64_t> > values;
+        std::vector<std::pair<std::string, std::string> > values;
         braft::SnapshotWriter* writer;
         braft::Closure* done;
     };
 
     braft::Node* volatile _node;
     butil::atomic<int64_t> _leader_term;
-    ValueMap _value_map;
+    std::map<std::string, std::string> _value_map;
 };
 
 void AtomicClosure::Run() {
@@ -448,9 +461,11 @@ public:
         return _atomic->get(request, response, done);
     }
     void exchange(::google::protobuf::RpcController* controller,
-                  const ::example::ExchangeRequest* request,
+                  ::example::ExchangeRequest* request,
                   ::example::AtomicResponse* response,
                   ::google::protobuf::Closure* done) {
+        std::string msg = request->id() + ":" + request->value();
+        request->set_value(msg);
         return _atomic->exchange(request, response, done);
     }
     void compare_exchange(::google::protobuf::RpcController* controller,
