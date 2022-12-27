@@ -455,6 +455,7 @@ int NodeImpl::init(const NodeOptions& options) {
 
     // check _server_id
     if (butil::IP_ANY == _server_id.addr.ip) {
+        LOG(ERROR) << "IP_ANY:" << butil::IP_ANY << "addr.ip:" << _server_id.addr.ip;
         LOG(ERROR) << "Group " << _group_id 
                    << " Node can't started from IP_ANY";
         return -1;

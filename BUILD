@@ -47,6 +47,7 @@ cc_library(
         "@com_google_protobuf//:protobuf",        
         ":cc_braft_internal_proto",
     ],
+    linkstatic = 1,
     visibility = ["//visibility:public"],
 )
 

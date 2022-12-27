@@ -662,6 +662,7 @@ int SegmentLogStorage::init(ConfigurationManager* configuration_manager) {
         return -1; 
     }
     butil::FilePath dir_path(_path);
+    LOG(INFO) << "_path is:" << _path;
     butil::File::Error e;
     if (!butil::CreateDirectoryAndGetError(
                 dir_path, &e, FLAGS_raft_create_parent_directories)) {
